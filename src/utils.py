@@ -59,15 +59,35 @@ def format_file_size(size_bytes: int) -> str:
 
 
 def setup_logging(log_file: Path, level=logging.INFO):
-    """Configura o sistema de logging"""
-    logging.basicConfig(
-        level=level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
-            logging.StreamHandler()
-        ]
-    )
+    """Configura o sistema de logging com formato limpo"""
+    # Remove handlers existentes
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+
+    # Formato simplificado
+    formatter = logging.Formatter('%(message)s')
+
+    # Handler para arquivo (com mais detalhes)
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(file_formatter)
+    file_handler.setLevel(level)
+
+    # Handler para console (simplificado)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    console_handler.setLevel(level)
+
+    # Configurar logger raiz
+    root_logger.setLevel(level)
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+
+    # Silenciar logs verbosos de bibliotecas externas
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('requests').setLevel(logging.WARNING)
+    logging.getLogger('connectionpool').setLevel(logging.WARNING)
 
 
 def extract_links_from_text(html: str, base_url: str) -> set:
