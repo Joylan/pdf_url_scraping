@@ -7,3 +7,16 @@ urllib3==2.1.0
 tinydb==4.8.0
 python-dotenv==1.0.0
 colorama==0.4.6
+
+# Requisições HTTP
+requests>=2.31.0
+
+# Parsing HTML
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+
+# Extração de PDF
+pdfplumber>=0.10.0
+
+# Banco de dados
+tinydb>=4.8.0

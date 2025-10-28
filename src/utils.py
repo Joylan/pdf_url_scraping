@@ -2,31 +2,38 @@
 import logging
 import re
 from pathlib import Path
+from typing import Set
 from urllib.parse import urlparse, urljoin, urldefrag
+
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
 
 def normalize_url(url: str) -> str:
-    """Normaliza uma URL removendo fragmentos e trailing slashes"""
+    """Normaliza uma URL removendo fragmentos e trailing slashes
+
+    Args:
+        url: URL a ser normalizada
+
+    Returns:
+        URL normalizada
+    """
     url, _ = urldefrag(url)
     url = url.rstrip('/')
     return url
 
 
-def is_same_domain(url: str, base_domain: str) -> bool:
-    """Verifica se a URL pertence ao mesmo domínio ou subdomínio"""
-    url_domain = urlparse(url).netloc
-    base_domain_parsed = urlparse(base_domain).netloc
+def is_valid_url(url: str, ignored_extensions: Set[str]) -> bool:
+    """Verifica se a URL é válida e não deve ser ignorada
 
-    url_domain = url_domain.replace('www.', '')
-    base_domain_parsed = base_domain_parsed.replace('www.', '')
+    Args:
+        url: URL a ser validada
+        ignored_extensions: Conjunto de extensões a ignorar
 
-    return url_domain == base_domain_parsed or url_domain.endswith('.' + base_domain_parsed)
-
-
-def is_valid_url(url: str, ignored_extensions: set) -> bool:
-    """Verifica se a URL é válida e não deve ser ignorada"""
+    Returns:
+        True se a URL for válida, False caso contrário
+    """
     if not url or not url.startswith(('http://', 'https://')):
         return False
 
@@ -38,19 +45,36 @@ def is_valid_url(url: str, ignored_extensions: set) -> bool:
 
 
 def clean_text(text: str) -> str:
-    """Limpa e normaliza o texto extraído"""
+    """Limpa e normaliza o texto extraído
+
+    Args:
+        text: Texto a ser limpo
+
+    Returns:
+        Texto limpo e normalizado
+    """
     if not text:
         return ""
 
+    # Substituir múltiplos espaços por um único espaço
     text = re.sub(r'\s+', ' ', text)
+    # Substituir múltiplas quebras de linha por no máximo duas
     text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+    # Remover espaços no início e fim
     text = text.strip()
 
     return text
 
 
 def format_file_size(size_bytes: int) -> str:
-    """Formata tamanho de arquivo para leitura humana"""
+    """Formata tamanho de arquivo para leitura humana
+
+    Args:
+        size_bytes: Tamanho em bytes
+
+    Returns:
+        String formatada (ex: "1.5 MB")
+    """
     for unit in ['B', 'KB', 'MB', 'GB']:
         if size_bytes < 1024.0:
             return f"{size_bytes:.2f} {unit}"
@@ -58,8 +82,13 @@ def format_file_size(size_bytes: int) -> str:
     return f"{size_bytes:.2f} TB"
 
 
-def setup_logging(log_file: Path, level=logging.INFO):
-    """Configura o sistema de logging com formato limpo"""
+def setup_logging(log_file: Path, level: int = logging.INFO):
+    """Configura o sistema de logging com formato limpo
+
+    Args:
+        log_file: Caminho do arquivo de log
+        level: Nível de logging (padrão: INFO)
+    """
     # Remove handlers existentes
     root_logger = logging.getLogger()
     for handler in root_logger.handlers[:]:
@@ -90,10 +119,16 @@ def setup_logging(log_file: Path, level=logging.INFO):
     logging.getLogger('connectionpool').setLevel(logging.WARNING)
 
 
-def extract_links_from_text(html: str, base_url: str) -> set:
-    """Extrai links de HTML usando regex simples"""
-    from bs4 import BeautifulSoup
+def extract_links_from_text(html: str, base_url: str) -> Set[str]:
+    """Extrai links de HTML usando BeautifulSoup
 
+    Args:
+        html: Conteúdo HTML
+        base_url: URL base para resolver links relativos
+
+    Returns:
+        Conjunto de URLs normalizadas
+    """
     soup = BeautifulSoup(html, 'lxml')
     links = set()
 

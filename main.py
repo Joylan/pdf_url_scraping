@@ -1,465 +1,453 @@
 """Script principal do crawler com interface gráfica"""
+import sys
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+SRC_DIR = BASE_DIR / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 import logging
 import shutil
 import threading
-import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, filedialog
+from urllib.parse import urlparse
 
-from config.settings import (
-    CRAWLED_URLS_DB, TEXT_OUTPUT_FILE, LOG_FILE, PDF_DIR,
-    MAX_DEPTH, MAX_PAGES
-)
-from src.crawler import WebCrawler
-from src.storage import URLStorage, TextStorage
-from src.utils import setup_logging
+# PyQt6 Imports
+from PyQt6 import QtWidgets, QtCore, QtGui
+
+# Tentativa de importar de config.settings, se falhar, usa valores padrão
+try:
+    from config.settings import (
+        CRAWLED_URLS_DB, TEXT_OUTPUT_FILE, LOG_FILE, PDF_DIR,
+        MAX_DEPTH as DEFAULT_MAX_DEPTH, MAX_PAGES as DEFAULT_MAX_PAGES
+    )
+except ImportError:
+    # Fallback se config.settings não for encontrado (ex: rodando standalone)
+    from pathlib import Path
+
+    print("Aviso: config/settings.py não encontrado. Usando valores padrão.")
+    BASE_DIR = Path(__file__).resolve().parent
+    DATA_DIR = BASE_DIR / "data"
+    LOGS_DIR = BASE_DIR / "logs"
+    PDF_DIR = DATA_DIR / "pdfs"
+
+    DATA_DIR.mkdir(exist_ok=True)
+    LOGS_DIR.mkdir(exist_ok=True)
+    PDF_DIR.mkdir(exist_ok=True)
+
+    CRAWLED_URLS_DB = DATA_DIR / "crawled_urls.json"
+    TEXT_OUTPUT_FILE = DATA_DIR / "text_output.txt"
+    LOG_FILE = LOGS_DIR / "crawler.log"
+
+# Tentativa de importar os módulos src
+try:
+    from src.crawler import WebCrawler
+    from src.storage import URLStorage, TextStorage
+    from src.utils import setup_logging
+except ImportError:
+    print("ERRO CRÍTICO: Módulos 'src' não encontrados. Verifique a estrutura do projeto.")
+
+
+    def setup_logging(file, level):
+        logging.basicConfig(level=logging.INFO, format='%(message)s')
+        print(f"Logging 'dummy' configurado para {file}")
 
 # Configurar logging ANTES de qualquer outra coisa
 setup_logging(LOG_FILE, level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class TextHandler(logging.Handler):
-    """Handler customizado para redirecionar logs para widget de texto"""
+class TextHandler(logging.Handler, QtCore.QObject):
+    """Handler customizado para redirecionar logs para widget de texto (Qt)"""
+    log_signal = QtCore.pyqtSignal(str)
 
     def __init__(self, text_widget):
-        super().__init__()
+        QtCore.QObject.__init__(self)
+        logging.Handler.__init__(self)
         self.text_widget = text_widget
+        self.log_signal.connect(self.append_log)
 
     def emit(self, record):
         msg = self.format(record)
+        self.log_signal.emit(msg)
 
-        def append():
-            self.text_widget.configure(state='normal')
-            self.text_widget.insert(tk.END, msg + '\n')
-            self.text_widget.configure(state='disabled')
-            self.text_widget.see(tk.END)
-
-        self.text_widget.after(0, append)
+    def append_log(self, msg):
+        self.text_widget.setReadOnly(False)
+        self.text_widget.append(msg)
+        self.text_widget.setReadOnly(True)
+        self.text_widget.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
 
-class CrawlerGUI:
-    """Interface gráfica para o crawler"""
+class CrawlerGUI(QtWidgets.QWidget):
+    """Interface gráfica para o crawler (PyQt6)"""
 
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Web Crawler RAG - Multi URL")
-        self.root.geometry("1100x800")
-        self.root.resizable(True, True)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Web Crawler RAG - Multi URL")
+        self.resize(1100, 800)
+        self.setMinimumSize(800, 600)
 
-        # Configurar tema azul
+        # Temas
         self.colors = {
-            'bg_dark': '#0a1929',
-            'bg_medium': '#1e3a5f',
-            'bg_light': '#2d5a8c',
-            'accent': '#3b82f6',
-            'accent_light': '#60a5fa',
-            'text': '#dbeafe',
-            'text_dark': '#93c5fd'
+            'bg_light': '#f0f8ff',  # Fundo principal (AliceBlue)
+            'bg_medium': '#ffffff',  # Fundo de campos (Branco)
+            'bg_dark': '#d4eaf7',  # Cor de calha / borda sutil
+            'accent': '#007bff',  # Azul primário (Bootstrap)
+            'accent_light': '#5cadff',  # Azul mais claro
+            'text': '#052c65',  # Texto (Azul escuro)
+            'text_dark': '#4a6984'  # Texto secundário (Azul acinzentado)
         }
-
-        self.root.configure(bg=self.colors['bg_dark'])
 
         self.crawler_thread = None
         self.crawler = None
         self.is_running = False
         self.urls_list = []
 
-        self.setup_styles()
         self.setup_ui()
         self.setup_logging_handler()
 
-    def setup_styles(self):
-        """Configura estilos personalizados"""
-        style = ttk.Style()
-        style.theme_use('clam')
-
-        # Configurar cores do tema
-        style.configure('.',
-                        background=self.colors['bg_medium'],
-                        foreground=self.colors['text'],
-                        bordercolor=self.colors['accent'],
-                        darkcolor=self.colors['bg_dark'],
-                        lightcolor=self.colors['bg_light'],
-                        troughcolor=self.colors['bg_dark'],
-                        focuscolor=self.colors['accent'],
-                        selectbackground=self.colors['accent'],
-                        selectforeground='white',
-                        fieldbackground=self.colors['bg_light'],
-                        font=('Segoe UI', 13))
-
-        # Frame
-        style.configure('TFrame', background=self.colors['bg_dark'])
-
-        # LabelFrame
-        style.configure('TLabelframe',
-                        background=self.colors['bg_dark'],
-                        bordercolor=self.colors['accent'],
-                        borderwidth=2)
-        style.configure('TLabelframe.Label',
-                        background=self.colors['bg_dark'],
-                        foreground=self.colors['accent_light'],
-                        font=('Segoe UI', 14, 'bold'))
-
-        # Label
-        style.configure('TLabel',
-                        background=self.colors['bg_dark'],
-                        foreground=self.colors['text'],
-                        font=('Segoe UI', 13))
-
-        # Button
-        style.configure('TButton',
-                        background=self.colors['accent'],
-                        foreground='white',
-                        borderwidth=0,
-                        focuscolor='none',
-                        padding=10,
-                        font=('Segoe UI', 13, 'bold'))
-        style.map('TButton',
-                  background=[('active', self.colors['accent_light']),
-                              ('disabled', self.colors['bg_light'])],
-                  foreground=[('disabled', self.colors['text_dark'])])
-
-        # Entry
-        style.configure('TEntry',
-                        fieldbackground=self.colors['bg_light'],
-                        foreground=self.colors['text'],
-                        borderwidth=1,
-                        insertcolor=self.colors['text'],
-                        font=('Segoe UI', 13))
-
-        # Spinbox
-        style.configure('TSpinbox',
-                        fieldbackground=self.colors['bg_light'],
-                        foreground=self.colors['text'],
-                        borderwidth=1,
-                        arrowcolor=self.colors['accent'],
-                        font=('Segoe UI', 13))
-
-        # Progressbar
-        style.configure('TProgressbar',
-                        background=self.colors['accent'],
-                        troughcolor=self.colors['bg_light'],
-                        borderwidth=0,
-                        thickness=10)
-
     def setup_ui(self):
-        """Configura a interface gráfica"""
-        # Frame principal
-        main_frame = ttk.Frame(self.root, padding="15")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        """Configura a interface gráfica (PyQt6)"""
+        self.setStyleSheet(f"""
+            QWidget {{
+                background: {self.colors['bg_light']};
+                color: {self.colors['text']};
+                font-family: Segoe UI, Arial, sans-serif;
+                font-size: 13pt;
+            }}
+            QGroupBox {{
+                border: 2px solid {self.colors['accent']};
+                border-radius: 8px;
+                margin-top: 12px;
+                font-weight: bold;
+                font-size: 15pt;
+            }}
+            QGroupBox:title {{
+                subcontrol-origin: margin;
+                left: 18px;
+                padding: 0 3px 0 3px;
+                color: {self.colors['accent']};
+                background: {self.colors['bg_light']};
+            }}
+            QPushButton {{
+                background: {self.colors['accent']};
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }}
+            QPushButton:disabled {{
+                background: {self.colors['bg_light']};
+                color: {self.colors['text_dark']};
+            }}
+            QPushButton:hover {{
+                background: {self.colors['accent_light']};
+            }}
+            QLineEdit, QSpinBox {{
+                background: {self.colors['bg_medium']};
+                color: {self.colors['text']};
+                border: 1px solid {self.colors['accent']};
+                border-radius: 4px;
+                font-size: 13pt;
+            }}
+            QListWidget {{
+                background: {self.colors['bg_medium']};
+                color: {self.colors['text']};
+                border: 1px solid {self.colors['accent']};
+                font-size: 13pt;
+            }}
+            QProgressBar {{
+                background: {self.colors['bg_dark']};
+                border-radius: 5px;
+                text-align: center;
+                height: 18px;
+            }}
+            QProgressBar::chunk {{
+                background: {self.colors['accent']};
+                border-radius: 5px;
+            }}
+        """)
 
-        # Configurar grid
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(2, weight=1)
-        main_frame.rowconfigure(5, weight=2)
+        main_layout = QtWidgets.QVBoxLayout(self)
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(15, 15, 15, 15)
 
         # Frame de URLs
-        url_frame = ttk.LabelFrame(main_frame, text="URLs para Crawling", padding="15")
-        url_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
-        url_frame.columnconfigure(0, weight=1)
-        url_frame.rowconfigure(0, weight=1)
+        url_group = QtWidgets.QGroupBox("URLs para Crawling")
+        url_layout = QtWidgets.QVBoxLayout(url_group)
+        main_layout.addWidget(url_group)
 
         # Lista de URLs
-        urls_list_frame = ttk.Frame(url_frame)
-        urls_list_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        urls_list_frame.columnconfigure(0, weight=1)
-        urls_list_frame.rowconfigure(0, weight=1)
-
-        self.urls_listbox = tk.Listbox(
-            urls_list_frame, height=6, font=('Segoe UI', 13),
-            selectmode=tk.EXTENDED,
-            bg=self.colors['bg_light'],
-            fg=self.colors['text'],
-            selectbackground=self.colors['accent'],
-            selectforeground='white',
-            borderwidth=1,
-            relief=tk.FLAT,
-            highlightthickness=1,
-            highlightcolor=self.colors['accent'],
-            highlightbackground=self.colors['bg_medium']
-        )
-        self.urls_listbox.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-
-        scrollbar = ttk.Scrollbar(urls_list_frame, orient=tk.VERTICAL, command=self.urls_listbox.yview)
-        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-        self.urls_listbox.config(yscrollcommand=scrollbar.set)
+        self.urls_listbox = QtWidgets.QListWidget()
+        self.urls_listbox.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.urls_listbox.setMinimumHeight(40)
+        url_layout.addWidget(self.urls_listbox)
 
         # Botões de gerenciamento de URLs
-        url_buttons_frame = ttk.Frame(url_frame)
-        url_buttons_frame.grid(row=1, column=0, pady=10)
-
-        ttk.Button(url_buttons_frame, text="➕ Adicionar URL", command=self.add_url, width=18).pack(side=tk.LEFT, padx=3)
-        ttk.Button(url_buttons_frame, text="📄 Carregar Arquivo", command=self.load_urls_from_file, width=18).pack(
-            side=tk.LEFT, padx=3)
-        ttk.Button(url_buttons_frame, text="🗑 Remover Selecionadas", command=self.remove_urls, width=20).pack(
-            side=tk.LEFT, padx=3)
-        ttk.Button(url_buttons_frame, text="🧹 Limpar Base de Dados", command=self.clear_database, width=20).pack(
-            side=tk.LEFT, padx=3)
+        url_btns = QtWidgets.QHBoxLayout()
+        url_layout.addLayout(url_btns)
+        btn_add = QtWidgets.QPushButton("➕ Adicionar URL")
+        btn_add.clicked.connect(self.add_url)
+        url_btns.addWidget(btn_add)
+        btn_load = QtWidgets.QPushButton("📄 Carregar Arquivo")
+        btn_load.clicked.connect(self.load_urls_from_file)
+        url_btns.addWidget(btn_load)
+        btn_remove = QtWidgets.QPushButton("🗑 Remover Selecionadas")
+        btn_remove.clicked.connect(self.remove_urls)
+        url_btns.addWidget(btn_remove)
+        btn_clear_db = QtWidgets.QPushButton("🧹 Limpar Base de Dados")
+        btn_clear_db.clicked.connect(self.clear_database)
+        url_btns.addWidget(btn_clear_db)
 
         # Frame de configurações
-        config_frame = ttk.LabelFrame(main_frame, text="Configurações", padding="15")
-        config_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=10)
-        config_frame.columnconfigure(1, weight=1)
-        config_frame.columnconfigure(3, weight=1)
+        config_group = QtWidgets.QGroupBox("Configurações")
+        config_layout = QtWidgets.QGridLayout(config_group)
+        main_layout.addWidget(config_group)
 
-        # Max páginas
-        ttk.Label(config_frame, text="Máx. Páginas:", font=('Segoe UI', 13, 'bold')).grid(row=0, column=0, sticky=tk.W,
-                                                                                          padx=8)
-        self.max_pages_var = tk.IntVar(value=MAX_PAGES)
-        self.max_pages_spinbox = ttk.Spinbox(
-            config_frame, from_=1, to=1000, textvariable=self.max_pages_var, width=12
-        )
-        self.max_pages_spinbox.grid(row=0, column=1, sticky=tk.W, padx=8)
-
-        # Max profundidade
-        ttk.Label(config_frame, text="Profundidade:", font=('Segoe UI', 13, 'bold')).grid(row=0, column=2, sticky=tk.W,
-                                                                                          padx=8)
-        self.max_depth_var = tk.IntVar(value=MAX_DEPTH)
-        self.max_depth_spinbox = ttk.Spinbox(
-            config_frame, from_=1, to=10, textvariable=self.max_depth_var, width=12
-        )
-        self.max_depth_spinbox.grid(row=0, column=3, sticky=tk.W, padx=8)
+        label_maxpages = QtWidgets.QLabel("Máx. Páginas:")
+        label_maxpages.setFont(QtGui.QFont("Segoe UI", 13, QtGui.QFont.Weight.Bold))
+        config_layout.addWidget(label_maxpages, 0, 0)
+        self.max_pages_spinbox = QtWidgets.QSpinBox()
+        self.max_pages_spinbox.setMinimum(1)
+        self.max_pages_spinbox.setMaximum(1000000)
+        self.max_pages_spinbox.setValue(DEFAULT_MAX_PAGES)
+        config_layout.addWidget(self.max_pages_spinbox, 0, 1)
+        label_depth = QtWidgets.QLabel("Profundidade:")
+        label_depth.setFont(QtGui.QFont("Segoe UI", 13, QtGui.QFont.Weight.Bold))
+        config_layout.addWidget(label_depth, 0, 2)
+        self.max_depth_spinbox = QtWidgets.QSpinBox()
+        self.max_depth_spinbox.setMinimum(1)
+        self.max_depth_spinbox.setMaximum(10)
+        self.max_depth_spinbox.setValue(DEFAULT_MAX_DEPTH)
+        config_layout.addWidget(self.max_depth_spinbox, 0, 3)
 
         # Botões de controle
-        button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=3, column=0, pady=15)
-
-        self.start_button = ttk.Button(
-            button_frame, text="▶ Iniciar Crawling", command=self.start_crawling, width=22
-        )
-        self.start_button.pack(side=tk.LEFT, padx=5)
-
-        self.stop_button = ttk.Button(
-            button_frame, text="⏹ Parar", command=self.stop_crawling, width=22, state='disabled'
-        )
-        self.stop_button.pack(side=tk.LEFT, padx=5)
-
-        self.clear_button = ttk.Button(
-            button_frame, text="🗑 Limpar Log", command=self.clear_log, width=22
-        )
-        self.clear_button.pack(side=tk.LEFT, padx=5)
-
-        # Barra de progresso
-        self.progress_var = tk.StringVar(value="Aguardando início...")
-        ttk.Label(main_frame, textvariable=self.progress_var, font=('Segoe UI', 11)).grid(
-            row=4, column=0, sticky=tk.W, pady=5
-        )
-
-        self.progress = ttk.Progressbar(main_frame, mode='indeterminate')
-        self.progress.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(25, 5))
+        btns_layout = QtWidgets.QHBoxLayout()
+        main_layout.addLayout(btns_layout)
+        self.start_button = QtWidgets.QPushButton("▶ Iniciar Crawling")
+        self.start_button.clicked.connect(self.start_crawling)
+        btns_layout.addWidget(self.start_button)
+        self.stop_button = QtWidgets.QPushButton("⏹ Parar")
+        self.stop_button.setEnabled(False)
+        self.stop_button.clicked.connect(self.stop_crawling)
+        btns_layout.addWidget(self.stop_button)
+        self.clear_button = QtWidgets.QPushButton("🗑 Limpar Log")
+        self.clear_button.clicked.connect(self.clear_log)
+        btns_layout.addWidget(self.clear_button)
+        self.export_button = QtWidgets.QPushButton("💾 Exportar Texto Raspado")
+        self.export_button.clicked.connect(self.export_text_output)
+        btns_layout.addWidget(self.export_button)
 
         # Área de log
-        log_frame = ttk.LabelFrame(main_frame, text="Log de Execução", padding="10")
-        log_frame.grid(row=5, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10)
-        log_frame.columnconfigure(0, weight=1)
-        log_frame.rowconfigure(0, weight=1)
+        log_group = QtWidgets.QGroupBox("Log de Execução")
+        log_layout = QtWidgets.QVBoxLayout(log_group)
+        main_layout.addWidget(log_group, stretch=1)
 
-        self.log_text = scrolledtext.ScrolledText(
-            log_frame, wrap=tk.WORD, width=90, height=22,
-            font=('Consolas', 13),
-            bg='#0d1b2a',
-            fg=self.colors['text'],
-            insertbackground=self.colors['accent'],
-            selectbackground=self.colors['accent'],
-            selectforeground='white',
-            borderwidth=0,
-            relief=tk.FLAT,
-            state='disabled'
-        )
-        self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.log_text = QtWidgets.QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setFont(QtGui.QFont("Consolas", 13))
+        log_layout.addWidget(self.log_text)
+
+        # Barra de progresso e label
+        self.progress_label = QtWidgets.QLabel("Aguardando início...")
+        self.progress_label.setFont(QtGui.QFont("Segoe UI", 11))
+        main_layout.addWidget(self.progress_label)
+        self.progress = QtWidgets.QProgressBar()
+        self.progress.setMinimum(0)
+        self.progress.setMaximum(0)  # Indeterminate
+        self.progress.setVisible(False)
+        main_layout.addWidget(self.progress)
 
         # Status bar
-        self.status_var = tk.StringVar(value="Pronto | 0 URLs carregadas")
-        status_bar = ttk.Label(
-            self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W,
-            background=self.colors['bg_medium'],
-            foreground=self.colors['text_dark'],
-            font=('Segoe UI', 12)
+        self.status_bar = QtWidgets.QLabel("Pronto | 0 URLs carregadas")
+        self.status_bar.setStyleSheet(
+            f"background: {self.colors['bg_dark']}; color: {self.colors['text_dark']}; padding: 2px 6px; font-size: 12pt;"
         )
-        status_bar.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        self.status_bar.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+        main_layout.addWidget(self.status_bar)
 
     def setup_logging_handler(self):
-        """Configura handler para redirecionar logs para a GUI"""
+        """Configura handler para redirecionar logs para a GUI (Qt)"""
         text_handler = TextHandler(self.log_text)
         text_handler.setFormatter(logging.Formatter('%(message)s'))
         logging.getLogger().addHandler(text_handler)
 
     def add_url(self):
-        """Adiciona uma URL à lista"""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Adicionar URL")
-        dialog.geometry("550x140")
-        dialog.configure(bg=self.colors['bg_dark'])
-        dialog.transient(self.root)
-        dialog.grab_set()
-
-        ttk.Label(dialog, text="URL:", font=('Segoe UI', 13, 'bold')).pack(pady=15, padx=15, anchor=tk.W)
-        url_entry = ttk.Entry(dialog, width=65, font=('Segoe UI', 13))
-        url_entry.pack(pady=5, padx=15, fill=tk.X)
-        url_entry.insert(0, "https://divulga.unila.edu.br/laca")
-        url_entry.focus()
+        """Adiciona uma URL à lista (PyQt6)"""
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Adicionar URL")
+        dialog.setFixedSize(550, 140)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        label = QtWidgets.QLabel("URL:")
+        label.setFont(QtGui.QFont("Segoe UI", 13, QtGui.QFont.Weight.Bold))
+        layout.addWidget(label)
+        url_entry = QtWidgets.QLineEdit()
+        url_entry.setText("https://divulga.unila.edu.br/laca")
+        url_entry.setFont(QtGui.QFont("Segoe UI", 13))
+        layout.addWidget(url_entry)
+        btns = QtWidgets.QHBoxLayout()
+        layout.addLayout(btns)
+        btn_add = QtWidgets.QPushButton("Adicionar")
+        btn_cancel = QtWidgets.QPushButton("Cancelar")
+        btns.addWidget(btn_add)
+        btns.addWidget(btn_cancel)
+        url_entry.setFocus()
 
         def on_add():
-            url = url_entry.get().strip()
+            url = url_entry.text().strip()
             if url and url != "https://" and url.startswith(('http://', 'https://')):
                 if url not in self.urls_list:
                     self.urls_list.append(url)
-                    self.urls_listbox.insert(tk.END, url)
+                    self.urls_listbox.addItem(url)
                     self.update_status()
-                    dialog.destroy()
+                    dialog.accept()
                 else:
-                    messagebox.showwarning("Aviso", "Esta URL já está na lista!")
+                    QtWidgets.QMessageBox.warning(dialog, "Aviso", "Esta URL já está na lista!")
             else:
-                messagebox.showerror("Erro", "URL inválida!")
+                QtWidgets.QMessageBox.critical(dialog, "Erro", "URL inválida!")
 
-        button_frame = ttk.Frame(dialog)
-        button_frame.pack(pady=15)
-        ttk.Button(button_frame, text="Adicionar", command=on_add).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Cancelar", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
-
-        url_entry.bind('<Return>', lambda e: on_add())
+        btn_add.clicked.connect(on_add)
+        btn_cancel.clicked.connect(dialog.reject)
+        url_entry.returnPressed.connect(on_add)
+        dialog.exec()
 
     def load_urls_from_file(self):
-        """Carrega URLs de um arquivo de texto"""
-        file_path = filedialog.askopenfilename(
-            title="Selecionar arquivo com URLs",
-            filetypes=[("Arquivos de texto", "*.txt"), ("Todos os arquivos", "*.*")]
+        """Carrega URLs de um arquivo de texto (PyQt6)"""
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Selecionar arquivo com URLs", "", "Arquivos de texto (*.txt);;Todos os arquivos (*)"
         )
-
         if file_path:
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
-
                 added = 0
                 for line in lines:
                     url = line.strip()
                     if url and url.startswith(('http://', 'https://')) and url not in self.urls_list:
                         self.urls_list.append(url)
-                        self.urls_listbox.insert(tk.END, url)
+                        self.urls_listbox.addItem(url)
                         added += 1
-
                 self.update_status()
-                messagebox.showinfo("Sucesso", f"{added} URLs adicionadas!")
+                QtWidgets.QMessageBox.information(self, "Sucesso", f"{added} URLs adicionadas!")
             except Exception as e:
-                messagebox.showerror("Erro", f"Erro ao carregar arquivo:\n{e}")
+                QtWidgets.QMessageBox.critical(self, "Erro", f"Erro ao carregar arquivo:\n{e}")
 
     def remove_urls(self):
-        """Remove URLs selecionadas"""
-        selected = self.urls_listbox.curselection()
+        """Remove URLs selecionadas (PyQt6)"""
+        selected = self.urls_listbox.selectedIndexes()
         if not selected:
-            messagebox.showwarning("Aviso", "Selecione URLs para remover!")
+            QtWidgets.QMessageBox.warning(self, "Aviso", "Selecione URLs para remover!")
             return
-
-        for index in reversed(selected):
-            url = self.urls_listbox.get(index)
+        for idx in sorted(selected, key=lambda x: x.row(), reverse=True):
+            url = self.urls_listbox.item(idx.row()).text()
             self.urls_list.remove(url)
-            self.urls_listbox.delete(index)
-
+            self.urls_listbox.takeItem(idx.row())
         self.update_status()
 
     def clear_urls(self):
-        """Limpa todas as URLs da lista"""
-        if messagebox.askyesno("Confirmar", "Limpar todas as URLs da lista?"):
+        """Limpa todas as URLs da lista (PyQt6)"""
+        reply = QtWidgets.QMessageBox.question(
+            self, "Confirmar", "Limpar todas as URLs da lista?",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
+        )
+        if reply == QtWidgets.QMessageBox.StandardButton.Yes:
             self.urls_list.clear()
-            self.urls_listbox.delete(0, tk.END)
+            self.urls_listbox.clear()
             self.update_status()
 
     def clear_database(self):
-        """Limpa toda a base de dados do crawling"""
-        msg = "⚠️ ATENÇÃO ⚠️\n\n"
-        msg += "Esta ação irá DELETAR:\n"
-        msg += "• Banco de dados de URLs processadas\n"
-        msg += "• Arquivo de texto extraído\n"
-        msg += "• Todos os PDFs baixados\n"
-        msg += "• Arquivos de log\n\n"
-        msg += "Esta ação NÃO pode ser desfeita!\n\n"
-        msg += "Deseja continuar?"
-
-        if messagebox.askyesno("⚠️ Confirmar Limpeza de Base de Dados", msg, icon='warning'):
+        """Limpa toda a base de dados do crawling (PyQt6)"""
+        msg = (
+            "⚠️ ATENÇÃO ⚠️\n\n"
+            "Esta ação irá DELETAR:\n"
+            "• Banco de dados de URLs processadas\n"
+            "• Arquivo de texto extraído\n"
+            "• Todos os PDFs baixados\n"
+            "• Arquivos de log\n\n"
+            "Esta ação NÃO pode ser desfeita!\n\n"
+            "Deseja continuar?"
+        )
+        reply = QtWidgets.QMessageBox.question(
+            self, "⚠️ Confirmar Limpeza de Base de Dados", msg,
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
+        )
+        if reply == QtWidgets.QMessageBox.StandardButton.Yes:
             try:
                 deleted_items = []
-
                 # Deletar banco de dados
                 if CRAWLED_URLS_DB.exists():
                     CRAWLED_URLS_DB.unlink()
                     deleted_items.append("✓ Banco de dados de URLs")
-
                 # Deletar arquivo de texto
                 if TEXT_OUTPUT_FILE.exists():
                     TEXT_OUTPUT_FILE.unlink()
                     deleted_items.append("✓ Arquivo de texto extraído")
-
                 # Deletar PDFs
                 if PDF_DIR.exists():
                     pdf_count = len(list(PDF_DIR.glob("*.pdf")))
                     shutil.rmtree(PDF_DIR)
                     PDF_DIR.mkdir(exist_ok=True)
                     deleted_items.append(f"✓ {pdf_count} arquivo(s) PDF")
-
                 # Deletar logs
                 if LOG_FILE.exists():
                     LOG_FILE.unlink()
                     deleted_items.append("✓ Arquivos de log")
-
                 # Reconfigurar logging após deletar o arquivo
                 setup_logging(LOG_FILE, level=logging.INFO)
                 self.setup_logging_handler()
-
                 logger.info("=" * 70)
                 logger.info("🗑️ BASE DE DADOS LIMPA COM SUCESSO")
                 logger.info("=" * 70)
                 for item in deleted_items:
                     logger.info(item)
                 logger.info("=" * 70)
-
-                messagebox.showinfo("Sucesso",
-                                    f"Base de dados limpa com sucesso!\n\n" + "\n".join(deleted_items))
-
+                QtWidgets.QMessageBox.information(
+                    self, "Sucesso", f"Base de dados limpa com sucesso!\n\n" + "\n".join(deleted_items)
+                )
             except Exception as e:
                 logger.error(f"❌ Erro ao limpar base de dados: {e}")
-                messagebox.showerror("Erro", f"Erro ao limpar base de dados:\n{e}")
+                QtWidgets.QMessageBox.critical(self, "Erro", f"Erro ao limpar base de dados:\n{e}")
 
     def update_status(self):
-        """Atualiza a barra de status"""
+        """Atualiza a barra de status (PyQt6)"""
         count = len(self.urls_list)
-        self.status_var.set(f"Pronto | {count} URL{'s' if count != 1 else ''} carregada{'s' if count != 1 else ''}")
+        self.status_bar.setText(
+            f"Pronto | {count} URL{'s' if count != 1 else ''} carregada{'s' if count != 1 else ''}"
+        )
 
     def start_crawling(self):
-        """Inicia o processo de crawling"""
+        """Inicia o processo de crawling (PyQt6)"""
         if not self.urls_list:
-            messagebox.showerror("Erro", "Adicione pelo menos uma URL para crawling!")
+            QtWidgets.QMessageBox.critical(self, "Erro", "Adicione pelo menos uma URL para crawling!")
             return
-
+        # Verificar se as classes 'dummy' estão sendo usadas
+        if 'WebCrawler' not in globals() or WebCrawler.__module__ == '__main__':
+            QtWidgets.QMessageBox.critical(self, "Erro Crítico",
+                                           "Módulos 'src' não encontrados. A aplicação não pode iniciar o crawl.")
+            return
         # Desabilitar controles
-        self.start_button.config(state='disabled')
-        self.stop_button.config(state='normal')
-        self.max_pages_spinbox.config(state='disabled')
-        self.max_depth_spinbox.config(state='disabled')
-
-        # Iniciar progress bar
-        self.progress.start(10)
-        self.progress_var.set(f"Crawling em andamento... ({len(self.urls_list)} URLs)")
-        self.status_var.set("🔄 Executando...")
-
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+        self.max_pages_spinbox.setEnabled(False)
+        self.max_depth_spinbox.setEnabled(False)
+        self.progress_label.setText(f"Crawling em andamento... ({len(self.urls_list)} URLs)")
+        self.status_bar.setText("Executando...")
+        self.progress.setVisible(True)
         # Iniciar crawler em thread separada
         self.is_running = True
         self.crawler_thread = threading.Thread(target=self.run_crawler, daemon=True)
         self.crawler_thread.start()
 
     def run_crawler(self):
-        """Executa o crawler em thread separada"""
+        """Executa o crawler em thread separada (PyQt6)"""
         try:
             # Obter configurações
-            max_pages = self.max_pages_var.get()
-            max_depth = self.max_depth_var.get()
-
+            max_pages = self.max_pages_spinbox.value()
+            max_depth = self.max_depth_spinbox.value()
             # Inicializar storage (compartilhado entre todas as URLs)
             url_storage = URLStorage(CRAWLED_URLS_DB)
             text_storage = TextStorage(TEXT_OUTPUT_FILE)
-
             # Criar crawler
             self.crawler = WebCrawler(
                 url_storage=url_storage,
@@ -467,89 +455,127 @@ class CrawlerGUI:
                 max_depth=max_depth,
                 max_pages=max_pages
             )
-
             logger.info("=" * 70)
             logger.info(f"🚀 Iniciando crawling de {len(self.urls_list)} URLs")
             logger.info(f"📊 Limite global: {max_pages} páginas | Profundidade: {max_depth}")
             logger.info("=" * 70 + "\n")
-
             # Executar crawling para cada URL
             for idx, url in enumerate(self.urls_list, 1):
                 if not self.is_running:
                     logger.info("\n⚠️  Crawling interrompido pelo usuário")
                     break
-
                 # Verificar se ainda há páginas disponíveis
                 total_processed = self.crawler.pages_processed + self.crawler.pdfs_processed
                 if total_processed >= max_pages:
                     logger.info(f"\n⚠️  Limite global de {max_pages} páginas atingido")
                     break
-
                 logger.info(f"\n{'─' * 70}")
                 logger.info(f"📍 [{idx}/{len(self.urls_list)}] {url}")
                 logger.info(f"{'─' * 70}")
-
                 try:
-                    self.crawler.crawl(url)
+                    # Restrinja crawling ao mesmo domínio/subdomínio da URL inicial
+                    parsed_url = urlparse(url)
+                    allowed_netloc = parsed_url.netloc
+
+                    def url_filter(candidate):
+                        return urlparse(candidate).netloc == allowed_netloc
+
+                    self.crawler.crawl(url, url_filter=url_filter)
                 except Exception as e:
                     logger.error(f"❌ Erro ao processar {url}: {e}")
                     continue
-
             # Resumo final consolidado
             if self.is_running:
                 logger.info("\n" + "=" * 70)
                 logger.info("✅ CRAWLING COMPLETO")
                 logger.info("=" * 70)
-                self.crawler._print_summary()
-                logger.info("=" * 70 + "\n")
-
+            # Chamar o 'on_crawling_complete' apenas se o loop terminou naturalmente
             if self.is_running:
-                self.root.after(0, self.on_crawling_complete, True, None)
-
+                QtCore.QMetaObject.invokeMethod(self, "on_crawling_complete", QtCore.Qt.ConnectionType.QueuedConnection,
+                                                QtCore.Q_ARG(bool, True), QtCore.Q_ARG(str, None))
         except Exception as e:
             logger.error(f"❌ Erro fatal durante o crawling: {e}")
-            self.root.after(0, self.on_crawling_complete, False, str(e))
+            QtCore.QMetaObject.invokeMethod(self, "on_crawling_complete", QtCore.Qt.ConnectionType.QueuedConnection,
+                                            QtCore.Q_ARG(bool, False), QtCore.Q_ARG(str, str(e)))
         finally:
             if self.crawler:
                 self.crawler.close()
+            if self.is_running:
+                # Isso pode acontecer se houver um erro antes do loop principal
+                QtCore.QMetaObject.invokeMethod(self, "on_crawling_complete", QtCore.Qt.ConnectionType.QueuedConnection,
+                                                QtCore.Q_ARG(bool, False),
+                                                QtCore.Q_ARG(str, "Erro na inicialização do crawler"))
 
     def stop_crawling(self):
-        """Para o crawling"""
-        self.is_running = False
-        self.on_crawling_complete(False, "Interrompido pelo usuário")
+        """Para o crawling (PyQt6)"""
+        if self.is_running:
+            self.is_running = False
+            logger.info("\n⏹ Parando o crawling... Aguarde a finalização da tarefa atual.")
+            self.stop_button.setEnabled(False)
+            QtCore.QTimer.singleShot(100, lambda: self.on_crawling_complete(False, "Interrompido pelo usuário"))
 
+    @QtCore.pyqtSlot(bool, str)
     def on_crawling_complete(self, success, error_msg):
-        """Callback quando o crawling termina"""
-        # Parar progress bar
-        self.progress.stop()
-
-        # Reabilitar controles
-        self.start_button.config(state='normal')
-        self.stop_button.config(state='disabled')
-        self.max_pages_spinbox.config(state='normal')
-        self.max_depth_spinbox.config(state='normal')
-
+        """Callback quando o crawling termina (PyQt6)"""
+        if self.start_button.isEnabled():
+            return  # Já foi finalizado e reabilitado
+        self.is_running = False
+        self.progress.setVisible(False)
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
+        self.max_pages_spinbox.setEnabled(True)
+        self.max_depth_spinbox.setEnabled(True)
         if success:
-            self.progress_var.set("✅ Crawling concluído com sucesso!")
-            self.status_var.set(f"✅ Concluído | {len(self.urls_list)} URLs processadas")
-            messagebox.showinfo("Sucesso", "Crawling concluído com sucesso!")
+            self.progress_label.setText("✅ Crawling concluído com sucesso!")
+            self.status_bar.setText(f"Concluído | {len(self.urls_list)} URLs processadas")
+            QtWidgets.QMessageBox.information(self, "Sucesso", "Crawling concluído com sucesso!")
         else:
-            self.progress_var.set("❌ Crawling interrompido ou com erro")
-            self.status_var.set("❌ Erro")
-            if error_msg and error_msg != "Interrompido pelo usuário":
-                messagebox.showerror("Erro", f"Erro durante crawling:\n{error_msg}")
+            self.progress_label.setText("❌ Crawling interrompido ou com erro")
+            self.status_bar.setText("Interrompido/Erro")
+            if error_msg == "Interrompido pelo usuário":
+                logger.info("=" * 70)
+                logger.info("⏹ Crawling interrompido pelo usuário.")
+                logger.info("=" * 70)
+            elif error_msg:
+                if error_msg not in ("Erro ou Interrupção", "Erro na inicialização do crawler"):
+                    QtWidgets.QMessageBox.critical(self, "Erro", f"Erro durante crawling:\n{error_msg}")
+                elif error_msg == "Erro na inicialização do crawler":
+                    logger.error(f"❌ {error_msg}")
 
     def clear_log(self):
-        """Limpa o log da interface"""
-        self.log_text.configure(state='normal')
-        self.log_text.delete(1.0, tk.END)
-        self.log_text.configure(state='disabled')
+        """Limpa o log da interface (PyQt6)"""
+        self.log_text.setReadOnly(False)
+        self.log_text.clear()
+        self.log_text.setReadOnly(True)
+
+    def export_text_output(self):
+        """Exporta o conteúdo de TEXT_OUTPUT_FILE para um arquivo .txt escolhido pelo usuário"""
+        if not TEXT_OUTPUT_FILE.exists():
+            QtWidgets.QMessageBox.warning(self, "Aviso", "Nenhum texto raspado foi encontrado para exportar!")
+            return
+        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Exportar Texto Raspado", "texto_raspado.txt", "Arquivos de texto (*.txt)"
+        )
+        if file_path:
+            try:
+                with open(TEXT_OUTPUT_FILE, "r", encoding="utf-8") as fin:
+                    data = fin.read()
+                with open(file_path, "w", encoding="utf-8") as fout:
+                    fout.write(data)
+                QtWidgets.QMessageBox.information(self, "Exportação concluída", f"Texto exportado para:\n{file_path}")
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(self, "Erro", f"Erro ao exportar texto:\n{e}")
 
 
 def main():
-    root = tk.Tk()
-    app = CrawlerGUI(root)
-    root.mainloop()
+    app = QtWidgets.QApplication(sys.argv)
+    main_window = QtWidgets.QMainWindow()
+    gui = CrawlerGUI()
+    main_window.setCentralWidget(gui)
+    main_window.setWindowTitle(gui.windowTitle())
+    main_window.resize(gui.width(), gui.height())
+    main_window.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
