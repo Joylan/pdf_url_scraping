@@ -1,0 +1,5 @@
+Subdomínio | Páginas visitadas
+==============================
+(raiz) | 3
+atos | 121
+tic | 1

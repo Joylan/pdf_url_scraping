@@ -22,6 +22,7 @@ try:
         MAX_DEPTH as DEFAULT_MAX_DEPTH, MAX_PAGES as DEFAULT_MAX_PAGES
     )
 except ImportError:
+    # Fallback se config.settings não for encontrado (ex: rodando standalone)
     from pathlib import Path
 
     print("Aviso: config/settings.py não encontrado. Usando valores padrão.")
@@ -38,7 +39,7 @@ except ImportError:
     TEXT_OUTPUT_FILE = DATA_DIR / "text_output.txt"
     LOG_FILE = LOGS_DIR / "crawler.log"
 
-# Módulos src
+# Tentativa de importar os módulos src
 try:
     from src.crawler import WebCrawler
     from src.storage import URLStorage, TextStorage
@@ -51,13 +52,13 @@ except ImportError:
         logging.basicConfig(level=logging.INFO, format='%(message)s')
         print(f"Logging 'dummy' configurado para {file}")
 
-# Configurar logging
+# Configurar logging ANTES de qualquer outra coisa
 setup_logging(LOG_FILE, level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class TextHandler(logging.Handler, QtCore.QObject):
-    """Handler customizado para logs no Qt"""
+    """Handler customizado para redirecionar logs para widget de texto (Qt)"""
     log_signal = QtCore.pyqtSignal(str)
 
     def __init__(self, text_widget):
@@ -67,7 +68,8 @@ class TextHandler(logging.Handler, QtCore.QObject):
         self.log_signal.connect(self.append_log)
 
     def emit(self, record):
-        self.log_signal.emit(self.format(record))
+        msg = self.format(record)
+        self.log_signal.emit(msg)
 
     def append_log(self, msg):
         self.text_widget.setReadOnly(False)
@@ -77,23 +79,23 @@ class TextHandler(logging.Handler, QtCore.QObject):
 
 
 class CrawlerGUI(QtWidgets.QWidget):
-    """Interface gráfica do crawler"""
+    """Interface gráfica para o crawler (PyQt6)"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(" Crawler and Scraping Informations for Multi URLs Institutional Sites")
+        self.setWindowTitle("Web Crawler RAG - Multi URL")
         self.resize(1100, 800)
         self.setMinimumSize(800, 600)
 
-        # 🎨 PALETA EM TONS DE ROXO (SUAVE)
+        # Temas
         self.colors = {
-            'bg_light': '#f8f3ff',  # roxo bem suave
-            'bg_medium': '#ffffff',
-            'bg_dark': '#efe4ff',  # contraste suave
-            'accent': '#9a6bd8',  # roxo menos saturado
-            'accent_light': '#cbb3f5',  # roxo muito leve
-            'text': '#4a2e70',  # roxo suave para texto
-            'text_dark': '#6a4a89'  # tom mais sóbrio
+            'bg_light': '#f0f8ff',  # Fundo principal (AliceBlue)
+            'bg_medium': '#ffffff',  # Fundo de campos (Branco)
+            'bg_dark': '#d4eaf7',  # Cor de calha / borda sutil
+            'accent': '#007bff',  # Azul primário (Bootstrap)
+            'accent_light': '#5cadff',  # Azul mais claro
+            'text': '#052c65',  # Texto (Azul escuro)
+            'text_dark': '#4a6984'  # Texto secundário (Azul acinzentado)
         }
 
         self.crawler_thread = None
@@ -104,14 +106,11 @@ class CrawlerGUI(QtWidgets.QWidget):
         self.setup_ui()
         self.setup_logging_handler()
 
-    # ----------------------------------------------------------------------
-    # UI principal
-    # ----------------------------------------------------------------------
     def setup_ui(self):
-        """Configura interface gráfica"""
+        """Configura a interface gráfica (PyQt6)"""
         self.setStyleSheet(f"""
             QWidget {{
-                background: #ffffff;
+                background: {self.colors['bg_light']};
                 color: {self.colors['text']};
                 font-family: Segoe UI, Arial, sans-serif;
                 font-size: 13pt;
@@ -126,9 +125,9 @@ class CrawlerGUI(QtWidgets.QWidget):
             QGroupBox:title {{
                 subcontrol-origin: margin;
                 left: 18px;
-                padding: 0 3px;
+                padding: 0 3px 0 3px;
                 color: {self.colors['accent']};
-                background: #ffffff;
+                background: {self.colors['bg_light']};
             }}
             QPushButton {{
                 background: {self.colors['accent']};
@@ -139,91 +138,53 @@ class CrawlerGUI(QtWidgets.QWidget):
                 font-weight: bold;
             }}
             QPushButton:disabled {{
-                background: #ffffff;
+                background: {self.colors['bg_light']};
                 color: {self.colors['text_dark']};
             }}
             QPushButton:hover {{
                 background: {self.colors['accent_light']};
-                color: white;
             }}
             QLineEdit, QSpinBox {{
-                background: #ffffff;
+                background: {self.colors['bg_medium']};
                 color: {self.colors['text']};
                 border: 1px solid {self.colors['accent']};
                 border-radius: 4px;
                 font-size: 13pt;
             }}
+            QListWidget {{
+                background: {self.colors['bg_medium']};
+                color: {self.colors['text']};
+                border: 1px solid {self.colors['accent']};
+                font-size: 13pt;
+            }}
+            QProgressBar {{
+                background: {self.colors['bg_dark']};
+                border-radius: 5px;
+                text-align: center;
+                height: 18px;
+            }}
+            QProgressBar::chunk {{
+                background: {self.colors['accent']};
+                border-radius: 5px;
+            }}
         """)
 
         main_layout = QtWidgets.QVBoxLayout(self)
-        main_layout.setSpacing(4)
-        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(15, 15, 15, 15)
 
-        # ------------------------------------------------------------------
-        # ⭐ SUBTÍTULO
-        # ------------------------------------------------------------------
-        subtitle = QtWidgets.QLabel("UNILA's Capivara.AI Chatbot Information Capture")
-        subtitle.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        subtitle.setStyleSheet(
-            f"""
-            QLabel {{
-                color: {self.colors['text']};
-                background: #ffffff;
-                margin-bottom: 3px;
-                margin-top: 1px;
-                font-size: 40px;  /* aumento real */
-                font-weight: bold;
-            }}
-            """
-        )
-        main_layout.addWidget(subtitle)
-
-        # ------------------------------------------------------------------
-        # ⭐ CONTAINER DAS IMAGENS (FUNDO GARANTIDO)
-        # ------------------------------------------------------------------
-        img_container = QtWidgets.QWidget()
-        img_container.setStyleSheet("background: #ffffff;")
-
-        img_layout = QtWidgets.QHBoxLayout(img_container)
-        img_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        img_layout.setContentsMargins(0, 5, 0, 5)
-
-        # Imagem 1 UNILA
-        unila_label = QtWidgets.QLabel()
-        unila_label.setStyleSheet("background: #ffffff;")
-        unila_pix = QtGui.QPixmap("image/unila.png").scaledToWidth(
-            int(120 * 1.5), QtCore.Qt.TransformationMode.SmoothTransformation
-        )
-        unila_label.setPixmap(unila_pix)
-
-        # Imagem 2 LACA
-        laca_label = QtWidgets.QLabel()
-        laca_label.setStyleSheet("background: #ffffff;")
-        laca_pix = QtGui.QPixmap("image/laca.png").scaledToWidth(
-            int(120 * 1.5), QtCore.Qt.TransformationMode.SmoothTransformation
-        )
-        laca_label.setPixmap(laca_pix)
-
-        # disposição
-        img_layout.addWidget(unila_label)
-        img_layout.addSpacing(int(120 * 1.5 / 2))  # 90px
-        img_layout.addWidget(laca_label)
-
-        main_layout.addWidget(img_container)
-
-        # ------------------------------------------------------------------
-        # ⭐ RESTANTE IGUAL AO ORIGINAL
-        # ------------------------------------------------------------------
-
+        # Frame de URLs
         url_group = QtWidgets.QGroupBox("URLs para Crawling")
         url_layout = QtWidgets.QVBoxLayout(url_group)
         main_layout.addWidget(url_group)
 
+        # Lista de URLs
         self.urls_listbox = QtWidgets.QListWidget()
         self.urls_listbox.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.urls_listbox.setFixedHeight(120)
+        self.urls_listbox.setMinimumHeight(40)
         url_layout.addWidget(self.urls_listbox)
 
+        # Botões de gerenciamento de URLs
         url_btns = QtWidgets.QHBoxLayout()
         url_layout.addLayout(url_btns)
         btn_add = QtWidgets.QPushButton("➕ Adicionar URL")
@@ -239,32 +200,29 @@ class CrawlerGUI(QtWidgets.QWidget):
         btn_clear_db.clicked.connect(self.clear_database)
         url_btns.addWidget(btn_clear_db)
 
+        # Frame de configurações
         config_group = QtWidgets.QGroupBox("Configurações")
         config_layout = QtWidgets.QGridLayout(config_group)
         main_layout.addWidget(config_group)
 
         label_maxpages = QtWidgets.QLabel("Máx. Páginas:")
-        label_maxpages.setFont(QtGui.QFont("Arial", 20, QtGui.QFont.Weight.Bold))
+        label_maxpages.setFont(QtGui.QFont("Segoe UI", 13, QtGui.QFont.Weight.Bold))
         config_layout.addWidget(label_maxpages, 0, 0)
-
         self.max_pages_spinbox = QtWidgets.QSpinBox()
         self.max_pages_spinbox.setMinimum(1)
         self.max_pages_spinbox.setMaximum(1000000)
         self.max_pages_spinbox.setValue(DEFAULT_MAX_PAGES)
-        self.max_pages_spinbox.setStyleSheet("font-size: 16px; padding: 10px; min-width: 120px;")
         config_layout.addWidget(self.max_pages_spinbox, 0, 1)
-
         label_depth = QtWidgets.QLabel("Profundidade:")
-        label_depth.setFont(QtGui.QFont("Arial", 20, QtGui.QFont.Weight.Bold))
+        label_depth.setFont(QtGui.QFont("Segoe UI", 13, QtGui.QFont.Weight.Bold))
         config_layout.addWidget(label_depth, 0, 2)
-
         self.max_depth_spinbox = QtWidgets.QSpinBox()
         self.max_depth_spinbox.setMinimum(1)
         self.max_depth_spinbox.setMaximum(10)
         self.max_depth_spinbox.setValue(DEFAULT_MAX_DEPTH)
-        self.max_depth_spinbox.setStyleSheet("font-size: 16px; padding: 10px; min-width: 120px;")
         config_layout.addWidget(self.max_depth_spinbox, 0, 3)
 
+        # Botões de controle
         btns_layout = QtWidgets.QHBoxLayout()
         main_layout.addLayout(btns_layout)
         self.start_button = QtWidgets.QPushButton("▶ Iniciar Crawling")
@@ -277,10 +235,11 @@ class CrawlerGUI(QtWidgets.QWidget):
         self.clear_button = QtWidgets.QPushButton("🗑 Limpar Log")
         self.clear_button.clicked.connect(self.clear_log)
         btns_layout.addWidget(self.clear_button)
-        self.export_button = QtWidgets.QPushButton("💾 Exportar Conteúdo")
+        self.export_button = QtWidgets.QPushButton("💾 Exportar Texto Raspado")
         self.export_button.clicked.connect(self.export_text_output)
         btns_layout.addWidget(self.export_button)
 
+        # Área de log
         log_group = QtWidgets.QGroupBox("Log de Execução")
         log_layout = QtWidgets.QVBoxLayout(log_group)
         main_layout.addWidget(log_group, stretch=1)
@@ -290,33 +249,32 @@ class CrawlerGUI(QtWidgets.QWidget):
         self.log_text.setFont(QtGui.QFont("Consolas", 13))
         log_layout.addWidget(self.log_text)
 
+        # Barra de progresso e label
         self.progress_label = QtWidgets.QLabel("Aguardando início...")
         self.progress_label.setFont(QtGui.QFont("Segoe UI", 11))
         main_layout.addWidget(self.progress_label)
-
         self.progress = QtWidgets.QProgressBar()
         self.progress.setMinimum(0)
-        self.progress.setMaximum(0)
+        self.progress.setMaximum(0)  # Indeterminate
         self.progress.setVisible(False)
         main_layout.addWidget(self.progress)
 
+        # Status bar
         self.status_bar = QtWidgets.QLabel("Pronto | 0 URLs carregadas")
         self.status_bar.setStyleSheet(
-            f"background: #ffffff; color: {self.colors['text_dark']}; padding: 2px 6px; font-size: 12pt;"
+            f"background: {self.colors['bg_dark']}; color: {self.colors['text_dark']}; padding: 2px 6px; font-size: 12pt;"
         )
         self.status_bar.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
         main_layout.addWidget(self.status_bar)
 
-    # -------------------------------------------------------
-    # Restante do código (NÃO ALTERADO)
-    # -------------------------------------------------------
-
     def setup_logging_handler(self):
+        """Configura handler para redirecionar logs para a GUI (Qt)"""
         text_handler = TextHandler(self.log_text)
         text_handler.setFormatter(logging.Formatter('%(message)s'))
         logging.getLogger().addHandler(text_handler)
 
     def add_url(self):
+        """Adiciona uma URL à lista (PyQt6)"""
         dialog = QtWidgets.QDialog(self)
         dialog.setWindowTitle("Adicionar URL")
         dialog.setFixedSize(550, 140)
@@ -338,7 +296,7 @@ class CrawlerGUI(QtWidgets.QWidget):
 
         def on_add():
             url = url_entry.text().strip()
-            if url and url.startswith(('http://', 'https://')):
+            if url and url != "https://" and url.startswith(('http://', 'https://')):
                 if url not in self.urls_list:
                     self.urls_list.append(url)
                     self.urls_listbox.addItem(url)
@@ -355,6 +313,7 @@ class CrawlerGUI(QtWidgets.QWidget):
         dialog.exec()
 
     def load_urls_from_file(self):
+        """Carrega URLs de um arquivo de texto (PyQt6)"""
         file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self, "Selecionar arquivo com URLs", "", "Arquivos de texto (*.txt);;Todos os arquivos (*)"
         )
@@ -365,7 +324,7 @@ class CrawlerGUI(QtWidgets.QWidget):
                 added = 0
                 for line in lines:
                     url = line.strip()
-                    if url.startswith(('http://', 'https://')) and url not in self.urls_list:
+                    if url and url.startswith(('http://', 'https://')) and url not in self.urls_list:
                         self.urls_list.append(url)
                         self.urls_listbox.addItem(url)
                         added += 1
@@ -375,6 +334,7 @@ class CrawlerGUI(QtWidgets.QWidget):
                 QtWidgets.QMessageBox.critical(self, "Erro", f"Erro ao carregar arquivo:\n{e}")
 
     def remove_urls(self):
+        """Remove URLs selecionadas (PyQt6)"""
         selected = self.urls_listbox.selectedIndexes()
         if not selected:
             QtWidgets.QMessageBox.warning(self, "Aviso", "Selecione URLs para remover!")
@@ -385,149 +345,216 @@ class CrawlerGUI(QtWidgets.QWidget):
             self.urls_listbox.takeItem(idx.row())
         self.update_status()
 
+    def clear_urls(self):
+        """Limpa todas as URLs da lista (PyQt6)"""
+        reply = QtWidgets.QMessageBox.question(
+            self, "Confirmar", "Limpar todas as URLs da lista?",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
+        )
+        if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+            self.urls_list.clear()
+            self.urls_listbox.clear()
+            self.update_status()
+
     def clear_database(self):
+        """Limpa toda a base de dados do crawling (PyQt6)"""
         msg = (
             "⚠️ ATENÇÃO ⚠️\n\n"
-            "Isto apagará:\n"
-            "• Banco de URLs processadas\n"
-            "• Textos extraídos\n"
-            "• PDFs baixados\n"
-            "• Logs\n\n"
+            "Esta ação irá DELETAR:\n"
+            "• Banco de dados de URLs processadas\n"
+            "• Arquivo de texto extraído\n"
+            "• Todos os PDFs baixados\n"
+            "• Arquivos de log\n\n"
+            "Esta ação NÃO pode ser desfeita!\n\n"
             "Deseja continuar?"
         )
         reply = QtWidgets.QMessageBox.question(
-            self, "Confirmar", msg,
+            self, "⚠️ Confirmar Limpeza de Base de Dados", msg,
             QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
         )
         if reply == QtWidgets.QMessageBox.StandardButton.Yes:
             try:
+                deleted_items = []
+                # Deletar banco de dados
                 if CRAWLED_URLS_DB.exists():
                     CRAWLED_URLS_DB.unlink()
+                    deleted_items.append("✓ Banco de dados de URLs")
+                # Deletar arquivo de texto
                 if TEXT_OUTPUT_FILE.exists():
                     TEXT_OUTPUT_FILE.unlink()
+                    deleted_items.append("✓ Arquivo de texto extraído")
+                # Deletar PDFs
                 if PDF_DIR.exists():
+                    pdf_count = len(list(PDF_DIR.glob("*.pdf")))
                     shutil.rmtree(PDF_DIR)
                     PDF_DIR.mkdir(exist_ok=True)
+                    deleted_items.append(f"✓ {pdf_count} arquivo(s) PDF")
+                # Deletar logs
                 if LOG_FILE.exists():
                     LOG_FILE.unlink()
+                    deleted_items.append("✓ Arquivos de log")
+                # Reconfigurar logging após deletar o arquivo
                 setup_logging(LOG_FILE, level=logging.INFO)
                 self.setup_logging_handler()
-                QtWidgets.QMessageBox.information(self, "Sucesso", "Base de dados limpa!")
+                logger.info("=" * 70)
+                logger.info("🗑️ BASE DE DADOS LIMPA COM SUCESSO")
+                logger.info("=" * 70)
+                for item in deleted_items:
+                    logger.info(item)
+                logger.info("=" * 70)
+                QtWidgets.QMessageBox.information(
+                    self, "Sucesso", f"Base de dados limpa com sucesso!\n\n" + "\n".join(deleted_items)
+                )
             except Exception as e:
-                logger.error(f"❌ Erro ao limpar base: {e}")
-                QtWidgets.QMessageBox.critical(self, "Erro", f"Erro ao limpar:\n{e}")
+                logger.error(f"❌ Erro ao limpar base de dados: {e}")
+                QtWidgets.QMessageBox.critical(self, "Erro", f"Erro ao limpar base de dados:\n{e}")
 
     def update_status(self):
+        """Atualiza a barra de status (PyQt6)"""
         count = len(self.urls_list)
         self.status_bar.setText(
             f"Pronto | {count} URL{'s' if count != 1 else ''} carregada{'s' if count != 1 else ''}"
         )
 
     def start_crawling(self):
+        """Inicia o processo de crawling (PyQt6)"""
         if not self.urls_list:
-            QtWidgets.QMessageBox.critical(self, "Erro", "Adicione ao menos uma URL!")
+            QtWidgets.QMessageBox.critical(self, "Erro", "Adicione pelo menos uma URL para crawling!")
             return
-
+        # Verificar se as classes 'dummy' estão sendo usadas
+        if 'WebCrawler' not in globals() or WebCrawler.__module__ == '__main__':
+            QtWidgets.QMessageBox.critical(self, "Erro Crítico",
+                                           "Módulos 'src' não encontrados. A aplicação não pode iniciar o crawl.")
+            return
+        # Desabilitar controles
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
         self.max_pages_spinbox.setEnabled(False)
         self.max_depth_spinbox.setEnabled(False)
+        self.progress_label.setText(f"Crawling em andamento... ({len(self.urls_list)} URLs)")
+        self.status_bar.setText("Executando...")
         self.progress.setVisible(True)
-        self.progress_label.setText("Crawling em andamento...")
-
+        # Iniciar crawler em thread separada
         self.is_running = True
         self.crawler_thread = threading.Thread(target=self.run_crawler, daemon=True)
         self.crawler_thread.start()
 
     def run_crawler(self):
+        """Executa o crawler em thread separada (PyQt6)"""
         try:
+            # Obter configurações
             max_pages = self.max_pages_spinbox.value()
             max_depth = self.max_depth_spinbox.value()
-
+            # Inicializar storage (compartilhado entre todas as URLs)
             url_storage = URLStorage(CRAWLED_URLS_DB)
             text_storage = TextStorage(TEXT_OUTPUT_FILE)
-
+            # Criar crawler
             self.crawler = WebCrawler(
                 url_storage=url_storage,
                 text_storage=text_storage,
                 max_depth=max_depth,
                 max_pages=max_pages
             )
-
             logger.info("=" * 70)
-            logger.info(f"🚀 Iniciando crawling ({len(self.urls_list)} URLs)")
-            logger.info("=" * 70)
-
-            for url in self.urls_list:
+            logger.info(f"🚀 Iniciando crawling de {len(self.urls_list)} URLs")
+            logger.info(f"📊 Limite global: {max_pages} páginas | Profundidade: {max_depth}")
+            logger.info("=" * 70 + "\n")
+            # Executar crawling para cada URL
+            for idx, url in enumerate(self.urls_list, 1):
                 if not self.is_running:
+                    logger.info("\n⚠️  Crawling interrompido pelo usuário")
                     break
-
-                logger.info(f"\nProcessando: {url}\n" + "-" * 50)
-
-                parsed_url = urlparse(url)
-                allowed_netloc = parsed_url.netloc
-
-                def url_filter(candidate):
-                    return urlparse(candidate).netloc == allowed_netloc
-
+                # Verificar se ainda há páginas disponíveis
+                total_processed = self.crawler.pages_processed + self.crawler.pdfs_processed
+                if total_processed >= max_pages:
+                    logger.info(f"\n⚠️  Limite global de {max_pages} páginas atingido")
+                    break
+                logger.info(f"\n{'─' * 70}")
+                logger.info(f"📍 [{idx}/{len(self.urls_list)}] {url}")
+                logger.info(f"{'─' * 70}")
                 try:
+                    # Restrinja crawling ao mesmo domínio/subdomínio da URL inicial
+                    parsed_url = urlparse(url)
+                    allowed_netloc = parsed_url.netloc
+
+                    def url_filter(candidate):
+                        return urlparse(candidate).netloc == allowed_netloc
+
                     self.crawler.crawl(url, url_filter=url_filter)
                 except Exception as e:
-                    logger.error(f"Erro ao processar {url}: {e}")
-
-            QtCore.QMetaObject.invokeMethod(
-                self,
-                "on_crawling_complete",
-                QtCore.Qt.ConnectionType.QueuedConnection,
-                QtCore.Q_ARG(bool, True),
-                QtCore.Q_ARG(str, None)
-            )
-
+                    logger.error(f"❌ Erro ao processar {url}: {e}")
+                    continue
+            # Resumo final consolidado
+            if self.is_running:
+                logger.info("\n" + "=" * 70)
+                logger.info("✅ CRAWLING COMPLETO")
+                logger.info("=" * 70)
+            # Chamar o 'on_crawling_complete' apenas se o loop terminou naturalmente
+            if self.is_running:
+                QtCore.QMetaObject.invokeMethod(self, "on_crawling_complete", QtCore.Qt.ConnectionType.QueuedConnection,
+                                                QtCore.Q_ARG(bool, True), QtCore.Q_ARG(str, None))
         except Exception as e:
-            logger.error(f"Erro fatal no crawler: {e}")
-            QtCore.QMetaObject.invokeMethod(
-                self, "on_crawling_complete",
-                QtCore.Qt.ConnectionType.QueuedConnection,
-                QtCore.Q_ARG(bool, False),
-                QtCore.Q_ARG(str, str(e))
-            )
+            logger.error(f"❌ Erro fatal durante o crawling: {e}")
+            QtCore.QMetaObject.invokeMethod(self, "on_crawling_complete", QtCore.Qt.ConnectionType.QueuedConnection,
+                                            QtCore.Q_ARG(bool, False), QtCore.Q_ARG(str, str(e)))
         finally:
             if self.crawler:
                 self.crawler.close()
+            if self.is_running:
+                # Isso pode acontecer se houver um erro antes do loop principal
+                QtCore.QMetaObject.invokeMethod(self, "on_crawling_complete", QtCore.Qt.ConnectionType.QueuedConnection,
+                                                QtCore.Q_ARG(bool, False),
+                                                QtCore.Q_ARG(str, "Erro na inicialização do crawler"))
 
     def stop_crawling(self):
+        """Para o crawling (PyQt6)"""
         if self.is_running:
             self.is_running = False
+            logger.info("\n⏹ Parando o crawling... Aguarde a finalização da tarefa atual.")
             self.stop_button.setEnabled(False)
-            logger.info("⏹ Parando crawling...")
+            QtCore.QTimer.singleShot(100, lambda: self.on_crawling_complete(False, "Interrompido pelo usuário"))
 
     @QtCore.pyqtSlot(bool, str)
     def on_crawling_complete(self, success, error_msg):
+        """Callback quando o crawling termina (PyQt6)"""
+        if self.start_button.isEnabled():
+            return  # Já foi finalizado e reabilitado
         self.is_running = False
+        self.progress.setVisible(False)
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
         self.max_pages_spinbox.setEnabled(True)
         self.max_depth_spinbox.setEnabled(True)
-        self.progress.setVisible(False)
-
         if success:
-            self.progress_label.setText("✅ Crawling concluído!")
-            QtWidgets.QMessageBox.information(self, "Sucesso", "Crawling concluído!")
+            self.progress_label.setText("✅ Crawling concluído com sucesso!")
+            self.status_bar.setText(f"Concluído | {len(self.urls_list)} URLs processadas")
+            QtWidgets.QMessageBox.information(self, "Sucesso", "Crawling concluído com sucesso!")
         else:
-            self.progress_label.setText("❌ Erro no crawling")
-            QtWidgets.QMessageBox.critical(self, "Erro", f"Erro: {error_msg}")
+            self.progress_label.setText("❌ Crawling interrompido ou com erro")
+            self.status_bar.setText("Interrompido/Erro")
+            if error_msg == "Interrompido pelo usuário":
+                logger.info("=" * 70)
+                logger.info("⏹ Crawling interrompido pelo usuário.")
+                logger.info("=" * 70)
+            elif error_msg:
+                if error_msg not in ("Erro ou Interrupção", "Erro na inicialização do crawler"):
+                    QtWidgets.QMessageBox.critical(self, "Erro", f"Erro durante crawling:\n{error_msg}")
+                elif error_msg == "Erro na inicialização do crawler":
+                    logger.error(f"❌ {error_msg}")
 
     def clear_log(self):
+        """Limpa o log da interface (PyQt6)"""
         self.log_text.setReadOnly(False)
         self.log_text.clear()
         self.log_text.setReadOnly(True)
 
     def export_text_output(self):
+        """Exporta o conteúdo de TEXT_OUTPUT_FILE para um arquivo .txt escolhido pelo usuário"""
         if not TEXT_OUTPUT_FILE.exists():
-            QtWidgets.QMessageBox.warning(self, "Aviso", "Nenhum texto raspado disponível!")
+            QtWidgets.QMessageBox.warning(self, "Aviso", "Nenhum texto raspado foi encontrado para exportar!")
             return
         file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Exportar Texto", "texto_raspado.txt", "Arquivos de texto (*.txt)"
+            self, "Exportar Texto Raspado", "texto_raspado.txt", "Arquivos de texto (*.txt)"
         )
         if file_path:
             try:
@@ -535,49 +562,14 @@ class CrawlerGUI(QtWidgets.QWidget):
                     data = fin.read()
                 with open(file_path, "w", encoding="utf-8") as fout:
                     fout.write(data)
-                QtWidgets.QMessageBox.information(self, "Exportado", f"Arquivo salvo em:\n{file_path}")
+                QtWidgets.QMessageBox.information(self, "Exportação concluída", f"Texto exportado para:\n{file_path}")
             except Exception as e:
-                QtWidgets.QMessageBox.critical(self, "Erro", f"Erro ao exportar:\n{e}")
+                QtWidgets.QMessageBox.critical(self, "Erro", f"Erro ao exportar texto:\n{e}")
 
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
     main_window = QtWidgets.QMainWindow()
-
-    # ----------- MENU BAR -----------
-    menu_bar = main_window.menuBar()
-
-    # Menu Sobre
-    menu_sobre = menu_bar.addMenu("Sobre")
-    action_sobre = QtGui.QAction("Sobre o Aplicativo", main_window)
-    action_sobre.triggered.connect(lambda: QtWidgets.QMessageBox.information(
-        main_window,
-        "Sobre o Aplicativo",
-        "Capivara.AI Institutional Crawler\n\n"
-        "Desenvolvido para capturar informações de múltiplos sites institucionais da UNILA,\n"
-        "incluindo HTML, PDFs e URLs visitadas.\n\n"
-        "Criado por: Laboratório de Computação Aplicada (LaCA).\n"
-        "Ano: 2025."
-    ))
-    menu_sobre.addAction(action_sobre)
-
-    # Menu Ajuda
-    menu_ajuda = menu_bar.addMenu("Ajuda")
-    action_ajuda = QtGui.QAction("Como usar", main_window)
-    action_ajuda.triggered.connect(lambda: QtWidgets.QMessageBox.information(
-        main_window,
-        "Ajuda",
-        "O aplicativo realiza crawling e scraping automático de URLs fornecidas.\n\n"
-        "Ele gera os seguintes arquivos:\n"
-        "• Lista de URLs visitadas (crawled_urls.json)\n"
-        "• Texto coletado de todas as páginas (text_output.txt)\n"
-        "• PDFs baixados na pasta 'pdfs/'\n\n"
-        "Use a interface para adicionar URLs, configurar profundidade e páginas,\n"
-        "iniciar o processo e exportar as informações coletadas."
-    ))
-    menu_ajuda.addAction(action_ajuda)
-
-    main_window.setStyleSheet("background-color: #ffffff;")
     gui = CrawlerGUI()
     main_window.setCentralWidget(gui)
     main_window.setWindowTitle(gui.windowTitle())

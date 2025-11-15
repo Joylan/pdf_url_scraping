@@ -2,6 +2,7 @@ http://documentos.unila.edu.br
 http://atos.unila.edu.br
 http://divulga.unila.edu.br
 http://portal.unila.edu.br
+https://servicos.unila.edu.br
 http://email.unila.edu.br
 http://sig.unila.edu.br
 http://sigaa.unila.edu.br

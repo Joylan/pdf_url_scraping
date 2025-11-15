@@ -243,14 +243,5 @@ Este projeto está sob licença MIT.
 ---
 
 **Versão**: 1.1.0  
-**Última Atualização**: 15 de outubro 2025  
+**Última Atualização**: Outubro 2025  
 **Autor**: Joylan Nunes Maciel
-
-requests
-beautifulsoup4
-lxml
-pdfplumber
-tinydb
-tldextract
-urllib3
-PyQt6
